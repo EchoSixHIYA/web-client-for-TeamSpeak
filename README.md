@@ -1,6 +1,6 @@
-# WebSpeak — TeamSpeak Web Voice Client
+# WebSpeak — TeamSpeak Browser Gateway
 
-Browser-based TeamSpeak client. No installation needed — open a link, listen and speak.
+Server-side browser gateway for TeamSpeak. Deploy on your server — users join voice channels from any browser, no TeamSpeak client needed.
 
 > [:cn: 中文版本](#chinese-version)
 
@@ -239,11 +239,11 @@ MIT
 
 ---
 
-<h1 id="chinese-version">WebSpeak — TeamSpeak 网页语音客户端（中文）</h1>
+<h1 id="chinese-version">WebSpeak — TeamSpeak 浏览器网关（中文）</h1>
 
-> [:us: English Version](#webspeak--teamspeak-web-voice-client)
+> [:us: English Version](#webspeak--teamspeak-browser-gateway)
 
-浏览器即开即用的 TeamSpeak 客户端。无需安装任何软件，打开链接就能听和说。
+部署在服务器上的 TeamSpeak 浏览器网关。用户无需安装 TS 客户端，浏览器即加入语音频道。
 
 **特性**
 - 全链路 Opus 音频，低延迟
