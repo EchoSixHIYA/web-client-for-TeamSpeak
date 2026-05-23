@@ -1,4 +1,235 @@
-# WebSpeak — TeamSpeak 网页语音客户端
+# WebSpeak — TeamSpeak Web Voice Client
+
+Browser-based TeamSpeak client. No installation needed — open a link, listen and speak.
+
+> [:cn: 中文版本](#chinese-version)
+
+**Features**
+- Full Opus audio pipeline, low latency
+- Voice-activated (VOX) + push-to-talk (Space key)
+- Channel list with click-to-switch
+- One-click share link
+- Each user gets an independent TS3 virtual client identity
+
+**Browser Requirements**
+- Chrome 94+ or Edge 94+ (WebCodecs API)
+- HTTPS (secure context required by WebCodecs)
+
+---
+
+## Architecture
+
+```
+Browser                       Node.js Server                     TeamSpeak Server
+┌─────────────────┐          ┌──────────────────────────┐       ┌──────────┐
+│ Mic → PCM       │──binary─▶│ /ws/voice                │       │          │
+│ ScriptProcessor │          │  ├─ PCM→Opus encode      │◀════▶│ TS Server│
+│                 │◀─Opus───│  │  └─ TS voice relay     │       │          │
+│ AudioDecoder    │          │                          │       │          │
+│ WebClient.vue   │◀─JSON───│ Channel/member list       │       │          │
+└─────────────────┘          └──────────────────────────┘       └──────────┘
+```
+
+## Installation
+
+### Prerequisites
+
+- Node.js 22+
+- TeamSpeak server (TS3 or TS6)
+- (Optional) TS6 WebQuery API key — for channel list
+
+### Linux
+
+```bash
+git clone https://github.com/EchoSixHIYA/WebClient4TeamSpeak.git
+cd WebClient4TeamSpeak
+
+# Install server dependencies
+npm install
+
+# Build frontend
+cd web
+npm install
+npx vite build
+cd ..
+
+# Compile TypeScript
+npx tsc
+
+# Generate self-signed SSL certificate (required for WebCodecs)
+mkdir -p certs
+openssl req -x509 -newkey rsa:2048 -keyout certs/key.pem -out certs/cert.pem -days 365 -nodes -subj "/CN=your-server-ip"
+```
+
+### Windows
+
+```powershell
+git clone https://github.com/EchoSixHIYA/WebClient4TeamSpeak.git
+cd WebClient4TeamSpeak
+
+# Install server dependencies
+npm install
+
+# Build frontend
+cd web
+npm install
+npx vite build
+cd ..
+
+# Compile TypeScript
+npx tsc
+
+# Generate self-signed SSL certificate (requires OpenSSL)
+# Download from https://slproweb.com/products/Win32OpenSSL.html if needed
+mkdir certs
+openssl req -x509 -newkey rsa:2048 -keyout certs\key.pem -out certs\cert.pem -days 365 -nodes -subj "/CN=localhost"
+```
+
+## Configuration
+
+On first run, `config.json` is auto-generated. Edit it:
+
+```json
+{
+  "port": 3040,
+  "tsHost": "127.0.0.1",
+  "tsPort": 9987,
+  "tsQueryPort": 10080,
+  "tsServerPassword": "",
+  "tsServerProtocol": "ts6",
+  "tsApiKey": "",
+  "voiceToken": "your-secret-token-here",
+  "maxClients": 10,
+  "trustProxy": false
+}
+```
+
+### Options
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| `port` | WebSpeak HTTP server port | `3040` |
+| `tsHost` | TeamSpeak server address | `127.0.0.1` |
+| `tsPort` | TeamSpeak voice port (UDP) | `9987` |
+| `tsQueryPort` | WebQuery HTTP port (TS3: 10011, TS6: 10080) | `10080` |
+| `tsServerPassword` | TS server password (empty if none) | `""` |
+| `tsServerProtocol` | Force `"ts3"` or `"ts6"`, blank for auto-detect | — |
+| `tsApiKey` | TS6 WebQuery API key. **Channel list won't work without it** | `""` |
+| `voiceToken` | Auth token for web clients (carried in share link) | — |
+| `maxClients` | Max concurrent web users | `10` |
+| `trustProxy` | Enable when behind nginx/Caddy | `false` |
+
+### Getting a TS6 WebQuery API Key
+
+Required for the channel list feature:
+
+1. SSH to TeamSpeak ServerQuery (port 10022)
+2. Login as `serveradmin`
+3. Run `apikeyadd scope=manage lifetime=0`
+4. Copy the returned key into `tsApiKey`
+
+Voice chat works fine without it — only the channel list will be empty.
+
+## Running
+
+### Development
+
+```bash
+# Server (auto-reload)
+npx tsx src/index.ts
+
+# Frontend dev server (separate terminal)
+cd web
+npx vite --host
+```
+
+### Production
+
+```bash
+node dist/index.js
+```
+
+#### systemd (recommended)
+
+```bash
+sudo tee /etc/systemd/system/webspeak.service << 'EOF'
+[Unit]
+Description=WebSpeak - TeamSpeak Web Client
+After=network.target
+
+[Service]
+Type=simple
+User=teamspeak
+WorkingDirectory=/home/teamspeak/webspeak-webclient
+ExecStart=/usr/bin/node dist/index.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now webspeak
+```
+
+## Usage
+
+1. Open `https://your-server:3040/?token=your-voice-token`
+2. Enter a nickname and optional channel name
+3. Click "连接"
+4. Default VOX mode (speak to transmit); switch to push-to-talk (hold Space)
+5. Click "分享" to copy a share link
+
+> TS server address, port, and auth token are all configured server-side in `config.json`.
+
+### URL Parameters
+
+| Param | Description |
+|-------|-------------|
+| `?token=xxx` | Auth token (required) |
+| `?channel=Lobby` | Pre-fill channel name |
+
+## Reverse Proxy (HTTPS)
+
+Instead of self-signed certs, use nginx:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name ts.example.com;
+
+    ssl_certificate /path/to/cert.pem;
+    ssl_certificate_key /path/to/key.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:3040;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+```
+
+Set `"trustProxy": true` in `config.json`.
+
+## Tech Stack
+
+- **Server**: Node.js + Express + ws + @honeybbq/teamspeak-client + @discordjs/opus
+- **Frontend**: Vue 3 + Vite + WebCodecs API (AudioEncoder/AudioDecoder)
+- **Audio**: Browser PCM capture → server-side Opus encode → TeamSpeak
+
+## License
+
+MIT
+
+---
+
+<h1 id="chinese-version">WebSpeak — TeamSpeak 网页语音客户端（中文）</h1>
+
+> [:us: English Version](#webspeak--teamspeak-web-voice-client)
 
 浏览器即开即用的 TeamSpeak 客户端。无需安装任何软件，打开链接就能听和说。
 
