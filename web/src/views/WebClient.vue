@@ -43,7 +43,7 @@
           <div v-for="m in ch.members" :key="m.id" class="member-item" :style="{ paddingLeft: (ch.depth * 14 + 24) + 'px' }">
             <span class="m-dot" :class="{ self: m.isSelf }"></span>
             <span class="m-name">{{ m.nickname }}</span>
-            <input v-if="!m.isSelf" type="range" min="0" max="200" :value="(volumes[m.id] ?? 1) * 100" @input="setVolume(m.id, Number(($event.target as HTMLInputElement).value) / 100)" class="vol-slider" title="音量" />
+            <input v-if="!m.isSelf" type="range" min="0" max="200" :value="(volumes[m.id] ?? 1) * 100" @input="onVolInput(m.id, $event)" class="vol-slider" title="音量" />
           </div>
         </template>
         <div v-if="channelTree.length === 0" style="color:#666;font-size:13px;padding:8px">自动加载中...</div>
@@ -92,6 +92,7 @@ function doConnect() {
 }
 function doDisconnect() { disconnect(); }
 function doSwitchChannel(chId: string) { switchChannel(chId); }
+function onVolInput(clientId: number, e: Event) { setVolume(clientId, Number((e.target as HTMLInputElement).value) / 100); }
 
 function doShare() {
   const url = new URL(location.href);
