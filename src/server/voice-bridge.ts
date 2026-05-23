@@ -1,8 +1,14 @@
 import { WebSocketServer, WebSocket } from "ws";
 import type { IncomingMessage } from "node:http";
 import type { Server } from "node:http";
+import { createRequire } from "node:module";
 import { TSClient, type TSVoiceData } from "./ts-client.js";
 import type { Logger } from "../logger.js";
+
+const require = createRequire(import.meta.url);
+const { OpusEncoder } = require("@discordjs/opus") as {
+  OpusEncoder: new (sr: number, ch: number) => { encode(pcm: Buffer): Buffer };
+};
 
 export interface VoiceBridgeOptions {
   tsHost: string;
@@ -25,6 +31,8 @@ interface WebClientEntry {
   ws: WebSocket;
   nickname: string;
   members: Map<number, ChannelMember>;
+  opusEncoder: { encode(pcm: Buffer): Buffer };
+  pcmAccumulator: Buffer;
 }
 
 export class VoiceBridge {
@@ -47,6 +55,8 @@ export class VoiceBridge {
       const token = url.searchParams.get("token");
       const channelName = url.searchParams.get("channel") ?? undefined;
       const nickname = url.searchParams.get("nickname") ?? "WebUser";
+      const tsHost = url.searchParams.get("tsHost") ?? this.options.tsHost;
+      const tsPort = parseInt(url.searchParams.get("tsPort") ?? String(this.options.tsPort), 10);
 
       if (token !== this.options.voiceToken) {
         this.logger.warn({ nickname }, "Invalid voice token");
@@ -64,9 +74,9 @@ export class VoiceBridge {
       this.logger.info({ entryId, nickname, channel: channelName }, "WebClient connecting");
 
       const tsClient = new TSClient({
-        host: this.options.tsHost,
-        port: this.options.tsPort,
-        nickname: nickname,
+        host: tsHost,
+        port: tsPort,
+        nickname,
         serverPassword: this.options.tsServerPassword,
         serverProtocol: this.options.tsServerProtocol,
         defaultChannel: channelName,
@@ -78,6 +88,8 @@ export class VoiceBridge {
         ws,
         nickname,
         members: new Map(),
+        opusEncoder: new OpusEncoder(48000, 1),
+        pcmAccumulator: Buffer.alloc(0),
       };
 
       tsClient.connect()
@@ -148,17 +160,17 @@ export class VoiceBridge {
             this.cleanup(entryId);
           });
 
-          // Browser → TS: incoming voice
-          let voiceFrameCount = 0;
+          // Browser → TS: PCM → Opus encoding
           ws.on("message", (data: Buffer) => {
-            // Reject frames that are too small to be valid Opus (< 3 bytes = DTX silence)
-            if (data.length < 3) return;
-            // Log the first few frames for debugging
-            if (voiceFrameCount < 3) {
-              this.logger.info({ entryId, frame: voiceFrameCount, bytes: data.length }, "Voice frame from browser");
+            entry.pcmAccumulator = Buffer.concat([entry.pcmAccumulator, data]);
+            while (entry.pcmAccumulator.length >= 1920) {
+              const pcm = entry.pcmAccumulator.subarray(0, 1920);
+              entry.pcmAccumulator = entry.pcmAccumulator.subarray(1920);
+              try {
+                const opus = entry.opusEncoder.encode(pcm);
+                tsClient.sendVoice(opus, 4);
+              } catch { /* */ }
             }
-            voiceFrameCount++;
-            tsClient.sendVoice(data, 4);
           });
 
           // WebSocket close → cleanup
