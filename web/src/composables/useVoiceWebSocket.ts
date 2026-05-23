@@ -144,7 +144,7 @@ export function useVoiceWebSocket() {
     if (channel) params.set("channel", channel);
     ws.value = new WebSocket(`${proto}//${location.host}/ws/voice?${params.toString()}`);
     ws.value.binaryType = "arraybuffer";
-    ws.value.onopen = () => { state.connected = true; startMicrophone().catch(e => { state.error = "麦克风: " + e.message; }); };
+    ws.value.onopen = () => { state.connected = true; startChannelPoll(); startMicrophone().catch(e => { state.error = "麦克风: " + e.message; }); };
     ws.value.onmessage = (event) => {
       if (typeof event.data === "string") { try { handleMessage(JSON.parse(event.data)); } catch { /* */ } }
       else handleAudioFrame(new Uint8Array(event.data));

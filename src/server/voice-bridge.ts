@@ -96,8 +96,51 @@ export class VoiceBridge {
         logger: this.logger,
       };
 
+      let tsReady = false;
+
+      // Register ws message handler IMMEDIATELY (before TS connects) so
+      // listChannels (which uses HTTP API) works right away. TS-dependent
+      // commands (switchChannel, PCM voice) are gated on tsReady.
+      ws.on("message", (data: Buffer | string) => {
+        if (typeof data === "string" || (data.length > 0 && data[0] === 0x7b)) {
+          try {
+            const cmd = JSON.parse(typeof data === "string" ? data : data.toString("utf-8"));
+            if (cmd && cmd.type) {
+              if (cmd.type === "listChannels" || (tsReady && cmd.type === "switchChannel")) {
+                this.logger.info({ entryId, cmd: cmd.type }, "WS command");
+                handleCommand(entry, this.options, cmd).catch((e) => {
+                  this.logger.error({ err: e.message || String(e) }, "Command failed");
+                });
+              }
+              return;
+            }
+          } catch { /* not JSON, fall through to PCM */ }
+        }
+        // PCM audio — only encode if TS is ready
+        if (Buffer.isBuffer(data) && tsReady) {
+          entry.pcmAccumulator = Buffer.concat([entry.pcmAccumulator, data]);
+          while (entry.pcmAccumulator.length >= 1920) {
+            const pcm = entry.pcmAccumulator.subarray(0, 1920);
+            entry.pcmAccumulator = entry.pcmAccumulator.subarray(1920);
+            try { tsClient.sendVoice(entry.opusEncoder.encode(pcm), 4); } catch { /* */ }
+          }
+        }
+      });
+
+      // Register cleanup handlers IMMEDIATELY so stale TS clients never leak
+      ws.on("close", () => {
+        this.logger.info({ entryId }, "WebSocket closed");
+        this.cleanup(entryId);
+      });
+
+      ws.on("error", (err) => {
+        this.logger.error({ err, entryId }, "WebSocket error");
+        this.cleanup(entryId);
+      });
+
       tsClient.connect()
         .then(() => {
+          tsReady = true;
           this.clients.set(entryId, entry);
 
           // Track channel members
@@ -161,43 +204,6 @@ export class VoiceBridge {
             if (ws.readyState === WebSocket.OPEN) {
               ws.send(JSON.stringify({ type: "disconnected" }));
             }
-            this.cleanup(entryId);
-          });
-
-          // Browser → TS: PCM → Opus encoding
-          ws.on("message", (data: Buffer | string) => {
-            // Try to parse as JSON first (either text frame or binary starting with '{')
-            if (typeof data === "string" || (data.length > 0 && data[0] === 0x7b)) {
-              try {
-                const cmd = JSON.parse(typeof data === "string" ? data : data.toString("utf-8"));
-                if (cmd && cmd.type) {
-                  this.logger.info({ entryId, cmd: cmd.type }, "WS command");
-                  handleCommand(entry, this.options, cmd).catch((e) => {
-                    this.logger.error({ err: e.message || String(e) }, "Command failed");
-                  });
-                  return;
-                }
-              } catch { /* not JSON, fall through to PCM */ }
-            }
-            // Binary frames = PCM audio
-            if (Buffer.isBuffer(data)) {
-              entry.pcmAccumulator = Buffer.concat([entry.pcmAccumulator, data]);
-              while (entry.pcmAccumulator.length >= 1920) {
-                const pcm = entry.pcmAccumulator.subarray(0, 1920);
-                entry.pcmAccumulator = entry.pcmAccumulator.subarray(1920);
-                try { tsClient.sendVoice(entry.opusEncoder.encode(pcm), 4); } catch { /* */ }
-              }
-            }
-          });
-
-          // WebSocket close → cleanup
-          ws.on("close", () => {
-            this.logger.info({ entryId }, "WebSocket closed");
-            this.cleanup(entryId);
-          });
-
-          ws.on("error", (err) => {
-            this.logger.error({ err, entryId }, "WebSocket error");
             this.cleanup(entryId);
           });
         })
