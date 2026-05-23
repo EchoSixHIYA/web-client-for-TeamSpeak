@@ -34,6 +34,7 @@ async function main() {
       tsQueryPort: config.tsQueryPort,
       tsServerPassword: config.tsServerPassword,
       tsServerProtocol: config.tsServerProtocol,
+      tsApiKey: config.tsApiKey,
       voiceToken: config.voiceToken,
       maxClients: config.maxClients,
     },

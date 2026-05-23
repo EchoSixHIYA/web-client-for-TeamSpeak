@@ -14,6 +14,8 @@ export interface AppConfig {
   tsServerPassword: string;
   /** Force protocol: "ts3" | "ts6" | undefined for auto-detect */
   tsServerProtocol?: "ts3" | "ts6";
+  /** WebQuery HTTP API key (for channel/client listing — optional, falls back to TS3 commands) */
+  tsApiKey: string;
   /** Pre-shared token for /ws/voice authentication */
   voiceToken: string;
   /** Max concurrent web clients */
@@ -30,6 +32,7 @@ export function getDefaultConfig(): AppConfig {
     tsQueryPort: 10011,
     tsServerPassword: "",
     tsServerProtocol: undefined,
+    tsApiKey: "",
     voiceToken: "change-me",
     maxClients: 20,
     trustProxy: false,

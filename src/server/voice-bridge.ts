@@ -1,9 +1,10 @@
 import { WebSocketServer, WebSocket } from "ws";
 import type { IncomingMessage } from "node:http";
 import type { Server } from "node:http";
+import { get } from "node:http";
 import { createRequire } from "node:module";
 import { TSClient, type TSVoiceData } from "./ts-client.js";
-import type { Logger } from "../logger.js";
+import type { Logger as LoggerType } from "../logger.js";
 
 const require = createRequire(import.meta.url);
 const { OpusEncoder } = require("@discordjs/opus") as {
@@ -16,6 +17,7 @@ export interface VoiceBridgeOptions {
   tsQueryPort: number;
   tsServerPassword: string;
   tsServerProtocol?: "ts3" | "ts6";
+  tsApiKey: string;
   voiceToken: string;
   maxClients: number;
 }
@@ -33,16 +35,17 @@ interface WebClientEntry {
   members: Map<number, ChannelMember>;
   opusEncoder: { encode(pcm: Buffer): Buffer };
   pcmAccumulator: Buffer;
+  logger: LoggerType;
 }
 
 export class VoiceBridge {
   private clients = new Map<string, WebClientEntry>();
   private wss: WebSocketServer | null = null;
-  private logger: Logger;
+  private logger: LoggerType;
 
   constructor(
     private options: VoiceBridgeOptions,
-    logger: Logger,
+    logger: LoggerType,
   ) {
     this.logger = logger.child({ component: "voice-bridge" });
   }
@@ -90,6 +93,7 @@ export class VoiceBridge {
         members: new Map(),
         opusEncoder: new OpusEncoder(48000, 1),
         pcmAccumulator: Buffer.alloc(0),
+        logger: this.logger,
       };
 
       tsClient.connect()
@@ -161,21 +165,28 @@ export class VoiceBridge {
           });
 
           // Browser → TS: PCM → Opus encoding
-          ws.on("message", (data: Buffer) => {
-            // JSON commands start with '{'
-            if (data.length > 0 && data[0] === 0x7b) {
-              try { handleCommand(entry, JSON.parse(data.toString("utf-8"))); } catch { /* */ }
-              return;
-            }
-            // PCM binary
-            entry.pcmAccumulator = Buffer.concat([entry.pcmAccumulator, data]);
-            while (entry.pcmAccumulator.length >= 1920) {
-              const pcm = entry.pcmAccumulator.subarray(0, 1920);
-              entry.pcmAccumulator = entry.pcmAccumulator.subarray(1920);
+          ws.on("message", (data: Buffer | string) => {
+            // Try to parse as JSON first (either text frame or binary starting with '{')
+            if (typeof data === "string" || (data.length > 0 && data[0] === 0x7b)) {
               try {
-                const opus = entry.opusEncoder.encode(pcm);
-                tsClient.sendVoice(opus, 4);
-              } catch { /* */ }
+                const cmd = JSON.parse(typeof data === "string" ? data : data.toString("utf-8"));
+                if (cmd && cmd.type) {
+                  this.logger.info({ entryId, cmd: cmd.type }, "WS command");
+                  handleCommand(entry, this.options, cmd).catch((e) => {
+                    this.logger.error({ err: e.message || String(e) }, "Command failed");
+                  });
+                  return;
+                }
+              } catch { /* not JSON, fall through to PCM */ }
+            }
+            // Binary frames = PCM audio
+            if (Buffer.isBuffer(data)) {
+              entry.pcmAccumulator = Buffer.concat([entry.pcmAccumulator, data]);
+              while (entry.pcmAccumulator.length >= 1920) {
+                const pcm = entry.pcmAccumulator.subarray(0, 1920);
+                entry.pcmAccumulator = entry.pcmAccumulator.subarray(1920);
+                try { tsClient.sendVoice(entry.opusEncoder.encode(pcm), 4); } catch { /* */ }
+              }
             }
           });
 
@@ -220,33 +231,76 @@ export class VoiceBridge {
   }
 }
 
-async function handleCommand(entry: WebClientEntry, cmd: { type: string; [k: string]: unknown }) {
+async function handleCommand(entry: WebClientEntry, opts: VoiceBridgeOptions, cmd: { type: string; [k: string]: unknown }) {
   switch (cmd.type) {
     case "listChannels": {
-      try {
-        const channels = await entry.tsClient.listChannels();
-        if (entry.ws.readyState === WebSocket.OPEN) {
-          entry.ws.send(JSON.stringify({ type: "channelList", channels }));
-        }
-      } catch {
-        if (entry.ws.readyState === WebSocket.OPEN) {
-          entry.ws.send(JSON.stringify({ type: "channelList", channels: [] }));
-        }
+      const result = await fetchChannelTree(opts);
+      if (entry.ws.readyState === WebSocket.OPEN) {
+        entry.ws.send(JSON.stringify({ type: "channelList", channels: result }));
       }
       break;
     }
     case "switchChannel": {
       try {
         await entry.tsClient.switchChannel(BigInt(cmd.channelId as string));
-        if (entry.ws.readyState === WebSocket.OPEN) {
-          entry.ws.send(JSON.stringify({ type: "channelSwitched", channelId: cmd.channelId }));
-        }
       } catch (e: any) {
-        if (entry.ws.readyState === WebSocket.OPEN) {
-          entry.ws.send(JSON.stringify({ type: "error", message: "切换失败: " + e.message }));
+        // "already member" is harmless (double-click) — not an error
+        if (!e.message?.includes("already member")) {
+          if (entry.ws.readyState === WebSocket.OPEN) {
+            entry.ws.send(JSON.stringify({ type: "error", message: "切换失败: " + e.message }));
+          }
+          break;
         }
+      }
+      // Refresh channel list on success (or "already member")
+      const tree = await fetchChannelTree(opts);
+      if (entry.ws.readyState === WebSocket.OPEN) {
+        entry.ws.send(JSON.stringify({ type: "channelList", channels: tree }));
       }
       break;
     }
+  }
+}
+
+function httpGetJSON(url: string, apiKey: string): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const options = {
+      hostname: u.hostname,
+      port: u.port,
+      path: u.pathname + u.search,
+      headers: { "x-api-key": apiKey },
+      timeout: 5000,
+    };
+    get(options, (res) => {
+      let data = "";
+      res.on("data", (chunk: string) => { data += chunk; });
+      res.on("end", () => {
+        try { resolve(JSON.parse(data)); } catch (e) { reject(e); }
+      });
+    }).on("error", reject).on("timeout", function(this: any) { this.destroy(); reject(new Error("timeout")); });
+  });
+}
+
+async function fetchChannelTree(opts: VoiceBridgeOptions): Promise<unknown[]> {
+  if (!opts.tsApiKey) return [];
+  try {
+    const base = `http://${opts.tsHost}:${opts.tsQueryPort}`;
+    const [chJson, clJson] = await Promise.all([
+      httpGetJSON(`${base}/1/channellist?-topic&-flags&-voice&-limits&-icon`, opts.tsApiKey),
+      httpGetJSON(`${base}/1/clientlist?-uid&-away&-voice&-times&-groups&-info`, opts.tsApiKey),
+    ]);
+    const channels: any[] = chJson.body || [];
+    const clients: any[] = clJson.body || [];
+    return channels.map((ch: any) => ({
+      id: String(ch.cid),
+      parentID: String(ch.pid || 0),
+      name: ch.channel_name || "?",
+      members: clients
+        .filter((c: any) => String(c.cid) === String(ch.cid))
+        .map((c: any) => ({ id: c.clid, nickname: c.client_nickname || "?" })),
+    }));
+  } catch {
+    return [];
   }
 }

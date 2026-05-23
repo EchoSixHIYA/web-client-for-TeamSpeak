@@ -3,10 +3,12 @@ import {
   Client as TS3FullClient,
   generateIdentity,
   listChannels as tsListChannels,
+  listClients as tsListClients,
   clientMove as tsClientMove,
   type Identity,
   type VoiceData,
   type ChannelInfo,
+  type ClientInfo,
 } from "@honeybbq/teamspeak-client";
 import type { Logger } from "../logger.js";
 
@@ -121,6 +123,11 @@ export class TSClient extends EventEmitter {
   async listChannels(): Promise<ChannelInfo[]> {
     if (!this.client) return [];
     return tsListChannels(this.client);
+  }
+
+  async listClients(): Promise<ClientInfo[]> {
+    if (!this.client) return [];
+    return tsListClients(this.client);
   }
 
   async switchChannel(channelId: bigint, password?: string): Promise<void> {
