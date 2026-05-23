@@ -221,6 +221,18 @@ Set `"trustProxy": true` in `config.json`.
 - **Frontend**: Vue 3 + Vite + WebCodecs API (AudioEncoder/AudioDecoder)
 - **Audio**: Browser PCM capture → server-side Opus encode → TeamSpeak
 
+## Star This Project
+
+If this project helps you, a **star** greatly increases its visibility and helps more people discover it. Just click ⭐ at the top right — it costs nothing but means a lot.
+
+## Donate / 打赏
+
+If you'd like to support the development, feel free to scan the WeChat QR code below. Any amount is appreciated!
+
+<img src="donate.png" width="260" alt="WeChat Pay QR Code">
+
+> Maintainer: [EchoSixHIYA](https://github.com/EchoSixHIYA)
+
 ## License
 
 MIT
@@ -439,6 +451,18 @@ server {
 ```
 
 并在 `config.json` 中设置 `"trustProxy": true`。
+
+## 求个 Star
+
+如果这个项目对你有帮助，请点击右上角的 ⭐ Star，让更多人看到它。不花钱，但是对我们意义重大。
+
+## 打赏
+
+如果你想支持开发，扫描下方微信收款码即可，金额随意！
+
+<img src="donate.png" width="260" alt="微信收款码">
+
+> 维护者: [EchoSixHIYA](https://github.com/EchoSixHIYA)
 
 ## 技术栈
 
