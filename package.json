@@ -1,0 +1,27 @@
+{
+  "name": "webspeak-webclient",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "TeamSpeak web voice client — listen and speak from the browser",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "web:dev": "cd web && npx vite --host",
+    "web:build": "cd web && npx vite build"
+  },
+  "dependencies": {
+    "@honeybbq/teamspeak-client": "^0.2.1",
+    "express": "^5.2.1",
+    "pino": "^10.3.1",
+    "ws": "^8.20.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/node": "^22.15.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2"
+  }
+}
