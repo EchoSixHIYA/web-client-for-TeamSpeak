@@ -40,9 +40,9 @@ export function useVoiceWebSocket() {
   let accumBuf = new Int16Array(2048);
   let accumLen = 0;
 
-  // Playback
+  // Playback — per-client state to avoid interleaving streams
   const remoteDecoders = new Map<number, AudioDecoder>();
-  let nextPlayTime = 0;
+  const remotePlayTimes = new Map<number, number>();
 
   function getAudioCtx(): AudioContext {
     if (!audioCtx) audioCtx = new AudioContext({ sampleRate: 48000 });
@@ -131,10 +131,10 @@ export function useVoiceWebSocket() {
             }
             const source = ctx.createBufferSource();
             source.buffer = buffer; source.connect(ctx.destination);
-            const now = ctx.currentTime;
-            if (nextPlayTime < now) nextPlayTime = now;
-            source.start(nextPlayTime);
-            nextPlayTime += numberOfFrames / sampleRate;
+            let pt = remotePlayTimes.get(clientId) ?? ctx.currentTime;
+            if (pt < ctx.currentTime) pt = ctx.currentTime;
+            source.start(pt);
+            remotePlayTimes.set(clientId, pt + numberOfFrames / sampleRate);
           } catch { /* */ }
           chunk.close();
         },
@@ -169,7 +169,7 @@ export function useVoiceWebSocket() {
     ws.value?.close(1000); ws.value = null;
     state.connected = false; state.tsClientId = 0; members.length = 0; channels.length = 0;
     for (const [, d] of remoteDecoders) d.close();
-    remoteDecoders.clear(); nextPlayTime = 0;
+    remoteDecoders.clear(); remotePlayTimes.clear();
   }
 
   function handleMessage(msg: any): void {
