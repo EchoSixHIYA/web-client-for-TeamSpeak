@@ -14,11 +14,17 @@ export interface VoiceBridgeOptions {
   maxClients: number;
 }
 
+interface ChannelMember {
+  id: number;
+  nickname: string;
+}
+
 interface WebClientEntry {
   id: string;
   tsClient: TSClient;
   ws: WebSocket;
   nickname: string;
+  members: Map<number, ChannelMember>;
 }
 
 export class VoiceBridge {
@@ -37,8 +43,7 @@ export class VoiceBridge {
     this.wss = new WebSocketServer({ server, path: "/ws/voice" });
 
     this.wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
-      // Parse auth params
-      const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+      const url = new URL(req.url ?? "/", `https://${req.headers.host ?? "localhost"}`);
       const token = url.searchParams.get("token");
       const channelName = url.searchParams.get("channel") ?? undefined;
       const nickname = url.searchParams.get("nickname") ?? "WebUser";
@@ -72,22 +77,49 @@ export class VoiceBridge {
         tsClient,
         ws,
         nickname,
+        members: new Map(),
       };
 
       tsClient.connect()
         .then(() => {
           this.clients.set(entryId, entry);
 
-          // Tell browser we're connected
-          ws.send(JSON.stringify({
-            type: "connected",
-            tsClientId: tsClient.getClientId(),
-          }));
+          // Track channel members
+          const selfId = tsClient.getClientId();
+
+          tsClient.on("clientEnter", (info) => {
+            entry.members.set(info.id, { id: info.id, nickname: info.nickname });
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({
+                type: "memberEnter",
+                id: info.id,
+                nickname: info.nickname,
+                isSelf: info.id === selfId,
+              }));
+            }
+          });
+
+          tsClient.on("clientLeave", (info) => {
+            entry.members.delete(info.id);
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: "memberLeave", id: info.id }));
+            }
+          });
+
+          // Delay then send full member list (clientEnter events arrive during connect)
+          setTimeout(() => {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({
+                type: "connected",
+                tsClientId: selfId,
+                members: Array.from(entry.members.values()),
+              }));
+            }
+          }, 500);
 
           // TS → Browser: forward voice data
           tsClient.on("voiceData", (data: TSVoiceData) => {
-            if (ws.readyState === WebSocket.OPEN) {
-              // Binary frame: [1B codec][2B clientId BE][Opus data]
+            if (ws.readyState === WebSocket.OPEN && data.clientId !== selfId) {
               const header = Buffer.alloc(3);
               header.writeUInt8(data.codec, 0);
               header.writeUInt16BE(data.clientId, 1);
@@ -108,26 +140,6 @@ export class VoiceBridge {
             }
           });
 
-          // TS → Browser: client enter/leave notifications
-          tsClient.on("clientEnter", (info) => {
-            if (ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({
-                type: "clientEnter",
-                id: info.id,
-                nickname: info.nickname,
-              }));
-            }
-          });
-
-          tsClient.on("clientLeave", (info) => {
-            if (ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({
-                type: "clientLeave",
-                id: info.id,
-              }));
-            }
-          });
-
           // TS disconnect → cleanup
           tsClient.on("disconnected", () => {
             if (ws.readyState === WebSocket.OPEN) {
@@ -138,7 +150,6 @@ export class VoiceBridge {
 
           // Browser → TS: incoming voice
           ws.on("message", (data: Buffer) => {
-            // Browser sends raw Opus frames (codec 4 = voice)
             tsClient.sendVoice(data, 4);
           });
 

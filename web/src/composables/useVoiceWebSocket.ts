@@ -6,6 +6,12 @@ export interface VoiceState {
   error: string;
 }
 
+export interface ChannelMember {
+  id: number;
+  nickname: string;
+  isSelf?: boolean;
+}
+
 export function useVoiceWebSocket() {
   const ws = ref<WebSocket | null>(null);
   const state = reactive<VoiceState>({
@@ -13,6 +19,7 @@ export function useVoiceWebSocket() {
     tsClientId: 0,
     error: "",
   });
+  const members = reactive<ChannelMember[]>([]);
 
   // Audio context (created on first user interaction)
   let audioCtx: AudioContext | null = null;
@@ -34,8 +41,13 @@ export function useVoiceWebSocket() {
     return audioCtx;
   }
 
-  // --- Check browser support ---
   function checkSupport(): string | null {
+    // WebCodecs requires secure context (HTTPS or localhost)
+    if (typeof window === "undefined") return null;
+    const isSecure = window.isSecureContext;
+    if (!isSecure) {
+      return "此页面需要安全上下文 (HTTPS)。WebCodecs API 在 HTTP 下不可用。";
+    }
     if (typeof AudioEncoder === "undefined" || typeof AudioDecoder === "undefined") {
       return "WebCodecs API (AudioEncoder/AudioDecoder) 不可用，请使用 Chrome 94+ 或 Edge 94+";
     }
@@ -62,8 +74,6 @@ export function useVoiceWebSocket() {
     });
 
     micTrack = micStream.getAudioTracks()[0];
-
-    // Use MediaStreamTrackProcessor to get raw audio frames
     micProcessor = new MediaStreamTrackProcessor({ track: micTrack });
     const readable = micProcessor.readable;
     micReader = readable.getReader();
@@ -86,7 +96,6 @@ export function useVoiceWebSocket() {
       bitrate: 32000,
     });
 
-    // Pump audio frames from mic → encoder
     isPumping = true;
     (async function pump() {
       while (isPumping && micReader) {
@@ -94,17 +103,12 @@ export function useVoiceWebSocket() {
           const { done, value } = await micReader.read();
           if (done) break;
           if (value && audioEncoder?.state === "configured") {
-            const frame = new VideoFrame(value, {
-              timestamp: value.timestamp,
-              duration: value.duration,
-            });
             audioEncoder.encode(value);
             value.close();
           } else if (value) {
             value.close();
           }
         } catch {
-          // stream ended
           break;
         }
       }
@@ -125,19 +129,17 @@ export function useVoiceWebSocket() {
 
   // --- Playback: decode Opus → speakers ---
   function playAudioFrame(clientId: number, opusData: Uint8Array): void {
-    if (opusData.length < 2) return; // skip empty/stub frames
+    if (opusData.length < 2) return;
 
     let decoder = remoteDecoders.get(clientId);
     if (!decoder) {
       const ctx = getAudioCtx();
       decoder = new AudioDecoder({
         output: (chunk: AudioData) => {
-          // Schedule this AudioData for playback on the AudioContext
           try {
             const { sampleRate, numberOfChannels, numberOfFrames } = chunk;
             const buffer = ctx.createBuffer(numberOfChannels, numberOfFrames, sampleRate);
 
-            // Copy planar float data
             for (let ch = 0; ch < numberOfChannels; ch++) {
               const channelData = new Float32Array(numberOfFrames);
               chunk.copyTo(channelData, { planeIndex: ch, format: "f32-planar" });
@@ -152,10 +154,6 @@ export function useVoiceWebSocket() {
             if (nextPlayTime < now) nextPlayTime = now;
             source.start(nextPlayTime);
             nextPlayTime += numberOfFrames / sampleRate;
-
-            source.onended = () => {
-              buffer; // keep ref
-            };
           } catch (e) {
             console.error("Playback error:", e);
           }
@@ -171,12 +169,11 @@ export function useVoiceWebSocket() {
       remoteDecoders.set(clientId, decoder);
     }
 
-    // Feed Opus frame to decoder
     try {
       const chunk = new EncodedAudioChunk({
         type: "key",
         timestamp: 0,
-        duration: 960, // 20ms at 48kHz
+        duration: 960,
         data: opusData,
       });
       decoder.decode(chunk);
@@ -188,6 +185,7 @@ export function useVoiceWebSocket() {
   // --- WebSocket connection ---
   function connect(serverUrl: string, token: string, channel: string, nickname: string): void {
     state.error = "";
+    members.length = 0;
 
     const params = new URLSearchParams({ token, nickname });
     if (channel) params.set("channel", channel);
@@ -205,11 +203,8 @@ export function useVoiceWebSocket() {
         try {
           const msg = JSON.parse(event.data);
           handleControlMessage(msg);
-        } catch {
-          // ignore malformed JSON
-        }
+        } catch { /* ignore */ }
       } else {
-        // Binary audio frame: [1B codec][2B clientId BE][N bytes Opus]
         handleAudioFrame(new Uint8Array(event.data));
       }
     };
@@ -233,8 +228,8 @@ export function useVoiceWebSocket() {
     ws.value = null;
     state.connected = false;
     state.tsClientId = 0;
+    members.length = 0;
 
-    // Clean up decoders
     for (const [, decoder] of remoteDecoders) {
       decoder.close();
     }
@@ -246,17 +241,27 @@ export function useVoiceWebSocket() {
     switch (msg.type) {
       case "connected":
         state.tsClientId = msg.tsClientId;
+        if (msg.members) {
+          members.length = 0;
+          for (const m of msg.members) {
+            members.push(m);
+          }
+        }
+        break;
+      case "memberEnter":
+        if (!members.find((m) => m.id === msg.id)) {
+          members.push({ id: msg.id, nickname: msg.nickname, isSelf: msg.isSelf });
+        }
+        break;
+      case "memberLeave":
+        {
+          const idx = members.findIndex((m) => m.id === msg.id);
+          if (idx >= 0) members.splice(idx, 1);
+        }
         break;
       case "disconnected":
         state.connected = false;
         state.error = "与 TeamSpeak 服务器的连接已断开";
-        break;
-      case "chatMessage":
-        // Could push to a chat store
-        break;
-      case "clientEnter":
-        break;
-      case "clientLeave":
         break;
     }
   }
@@ -266,10 +271,6 @@ export function useVoiceWebSocket() {
     const codec = data[0];
     const clientId = (data[1] << 8) | data[2];
     const opusFrame = data.slice(3);
-
-    // Ignore self-voice (the server sends back our own voice too)
-    if (clientId === state.tsClientId || clientId === 0) return;
-
     playAudioFrame(clientId, opusFrame);
   }
 
@@ -280,6 +281,7 @@ export function useVoiceWebSocket() {
   return {
     ws,
     state,
+    members,
     connect,
     disconnect,
     startMicrophone,

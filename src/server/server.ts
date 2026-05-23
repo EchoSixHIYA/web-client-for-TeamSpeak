@@ -1,5 +1,7 @@
 import express from "express";
-import { createServer } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
+import { createServer as createHttpServer } from "node:http";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { VoiceBridge, type VoiceBridgeOptions } from "./voice-bridge.js";
@@ -11,6 +13,7 @@ export interface WebServerOptions {
   port: number;
   trustProxy: boolean;
   staticDir?: string;
+  certDir?: string; // path to cert.pem + key.pem for HTTPS
   voiceBridgeOptions: VoiceBridgeOptions;
   logger: Logger;
 }
@@ -22,8 +25,18 @@ export interface WebServer {
 
 export function createWebServer(options: WebServerOptions): WebServer {
   const app = express();
-  const server = createServer(app);
   const logger = options.logger.child({ component: "web" });
+
+  let server: ReturnType<typeof createHttpsServer> | ReturnType<typeof createHttpServer>;
+
+  if (options.certDir) {
+    const cert = readFileSync(path.join(options.certDir, "cert.pem"));
+    const key = readFileSync(path.join(options.certDir, "key.pem"));
+    server = createHttpsServer({ cert, key }, app);
+    logger.info("HTTPS enabled");
+  } else {
+    server = createHttpServer(app);
+  }
 
   if (options.trustProxy) {
     app.set("trust proxy", true);
@@ -31,7 +44,6 @@ export function createWebServer(options: WebServerOptions): WebServer {
 
   app.use(express.json({ limit: "100kb" }));
 
-  // Health check
   app.get("/api/health", (_req, res) => {
     res.json({ status: "ok", version: "0.1.0" });
   });
