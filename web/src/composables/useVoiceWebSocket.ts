@@ -23,7 +23,7 @@ export function useVoiceWebSocket() {
   let scriptNode: ScriptProcessorNode | null = null;
   let micSource: MediaStreamAudioSourceNode | null = null;
   let pttPressed = false;
-  let micMode: "vox" | "ptt" = "vox";
+  const micMode = ref<"vox" | "ptt">("vox");
   let voxHold = 0;
   const VOX_HOLD = 15;
   const VOX_THRESHOLD = 0.008;
@@ -57,7 +57,7 @@ export function useVoiceWebSocket() {
     scriptNode.onaudioprocess = (event) => {
       const input = event.inputBuffer.getChannelData(0);
       // Gate: VOX energy detection or keyboard PTT
-      const shouldSend = micMode === "ptt" ? pttPressed : voxGate(input);
+      const shouldSend = micMode.value === "ptt" ? pttPressed : voxGate(input);
       if (!shouldSend) { pcmBuffer = new Int16Array(0); return; }
       const int16 = new Int16Array(input.length);
       for (let i = 0; i < input.length; i++) {
@@ -171,9 +171,9 @@ export function useVoiceWebSocket() {
     playAudioFrame(clientId, data.slice(3));
   }
 
-  function setMicMode(m: "vox" | "ptt") { micMode = m; }
+  function setMicMode(m: "vox" | "ptt") { micMode.value = m; }
   function setPTT(p: boolean) { pttPressed = p; }
   function clearError() { state.error = ""; }
 
-  return { ws, state, members, micMode: () => micMode, connect, disconnect, setMicMode, setPTT, checkSupport, clearError };
+  return { ws, state, members, micMode, connect, disconnect, setMicMode, setPTT, checkSupport, clearError };
 }

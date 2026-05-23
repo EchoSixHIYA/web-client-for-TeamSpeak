@@ -9,30 +9,35 @@
     <div v-if="!voiceState.connected" class="panel">
       <div class="panel-title">加入服务器</div>
       <div v-if="voiceState.error" class="error-box">{{ voiceState.error }}</div>
+      <div v-if="needsToken" class="error-box">
+        缺少连接密钥。请使用完整链接: <br/>
+        <code>{{ location.origin }}/?token=你的密钥</code>
+      </div>
       <div v-if="browserError" class="error-box">{{ browserError }}</div>
 
-      <div class="form-row">
-        <div class="form-group" style="flex:3">
-          <label>TeamSpeak 服务器 IP</label>
-          <input v-model="tsHost" placeholder="127.0.0.1" />
+      <template v-if="!needsToken">
+        <div class="form-row">
+          <div class="form-group" style="flex:3">
+            <label>TeamSpeak 服务器 IP</label>
+            <input v-model="tsHost" placeholder="127.0.0.1" />
+          </div>
+          <div class="form-group" style="flex:1">
+            <label>端口</label>
+            <input v-model="tsPort" placeholder="9987" />
+          </div>
         </div>
-        <div class="form-group" style="flex:1">
-          <label>端口</label>
-          <input v-model="tsPort" placeholder="9987" />
+        <div class="form-group">
+          <label>昵称</label>
+          <input v-model="nickname" placeholder="你的昵称" maxlength="30" />
         </div>
-      </div>
-      <div class="form-group">
-        <label>昵称</label>
-        <input v-model="nickname" placeholder="你的昵称" maxlength="30" />
-      </div>
-      <div class="form-group">
-        <label>频道名</label>
-        <input v-model="channel" placeholder="输入频道名" />
-      </div>
-
-      <button :disabled="!tsHost.trim() || !nickname.trim() || !channel.trim()" class="btn btn-primary" @click="doConnect">
-        连接
-      </button>
+        <div class="form-group">
+          <label>频道名（可选）</label>
+          <input v-model="channel" placeholder="留空进入默认频道" />
+        </div>
+        <button :disabled="!tsHost.trim() || !nickname.trim()" class="btn btn-primary" @click="doConnect">
+          连接
+        </button>
+      </template>
     </div>
 
     <!-- Connected -->
@@ -41,8 +46,8 @@
         <span class="status-dot"></span>
         <span>{{ tsHost }}</span>
         <span class="mode-switch">
-          <button :class="{ active: currentMode === 'vox' }" @click="setMicMode('vox')">自由麦</button>
-          <button :class="{ active: currentMode === 'ptt' }" @click="setMicMode('ptt')">按键说话</button>
+          <button :class="{ active: micMode === 'vox' }" @click="setMicMode('vox')">自由麦</button>
+          <button :class="{ active: micMode === 'ptt' }" @click="setMicMode('ptt')">按键说话</button>
         </span>
         <button class="btn-disconnect" @click="doDisconnect">断开</button>
       </div>
@@ -57,7 +62,7 @@
         </div>
       </div>
 
-      <div v-if="currentMode === 'ptt'" class="ptt-bar">
+      <div v-if="micMode === 'ptt'" class="ptt-bar">
         {{ pttActive ? '🔊 正在发送' : '按住 空格键 说话' }}
       </div>
 
@@ -78,12 +83,12 @@ const tsHost = ref(qs.get("ts") ?? "127.0.0.1");
 const tsPort = ref("9987");
 const nickname = ref("");
 const channel = ref(qs.get("channel") ?? "");
-const token = qs.get("token") ?? "test-token-123";
+const token = qs.get("token") ?? "";
 
 const pttActive = ref(false);
-const currentMode = ref<"vox" | "ptt">("vox");
 const browserError = ref("");
 const rootEl = ref<HTMLElement | null>(null);
+const needsToken = !token;
 
 onMounted(() => { const e = checkSupport(); if (e) browserError.value = e; });
 onUnmounted(() => { disconnect(); });
@@ -95,15 +100,13 @@ function doConnect() {
 }
 function doDisconnect() { disconnect(); }
 
-function switchMode(m: "vox" | "ptt") { currentMode.value = m; setMicMode(m); }
-
 function onKeyDown(e: KeyboardEvent) {
-  if (e.code === "Space" && currentMode.value === "ptt" && !pttActive.value) {
+  if (e.code === "Space" && micMode.value === "ptt" && !pttActive.value) {
     e.preventDefault(); pttActive.value = true; setPTT(true);
   }
 }
 function onKeyUp(e: KeyboardEvent) {
-  if (e.code === "Space" && currentMode.value === "ptt") {
+  if (e.code === "Space" && micMode.value === "ptt") {
     pttActive.value = false; setPTT(false);
   }
 }
