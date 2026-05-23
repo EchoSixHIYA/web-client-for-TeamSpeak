@@ -55,6 +55,7 @@ export function useVoiceWebSocket() {
 
   async function startMicrophone(): Promise<void> {
     const ctx = getAudioCtx();
+    if (ctx.state === "suspended") await ctx.resume();
     micStream = await navigator.mediaDevices.getUserMedia({
       audio: { sampleRate: { ideal: 48000 }, channelCount: { ideal: 1 }, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
@@ -99,6 +100,7 @@ export function useVoiceWebSocket() {
     scriptNode?.disconnect(); scriptNode = null;
     micSource?.disconnect(); micSource = null;
     micStream?.getTracks().forEach((t) => t.stop()); micStream = null;
+    audioCtx?.close(); audioCtx = null;
   }
 
   // --- Playback ---
