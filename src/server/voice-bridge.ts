@@ -300,7 +300,7 @@ async function fetchChannelTree(opts: VoiceBridgeOptions): Promise<unknown[]> {
       name: ch.channel_name || "?",
       members: clients
         .filter((c: any) => String(c.cid) === String(ch.cid))
-        .map((c: any) => ({ id: c.clid, nickname: c.client_nickname || "?" })),
+        .map((c: any) => ({ id: Number(c.clid), nickname: c.client_nickname || "?" })),
     }));
   } catch {
     return [];
