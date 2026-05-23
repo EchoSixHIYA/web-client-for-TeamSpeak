@@ -34,7 +34,6 @@ interface WebClientEntry {
   nickname: string;
   members: Map<number, ChannelMember>;
   opusEncoder: { encode(pcm: Buffer): Buffer };
-  pcmAccumulator: Buffer;
   logger: LoggerType;
 }
 
@@ -92,7 +91,6 @@ export class VoiceBridge {
         nickname,
         members: new Map(),
         opusEncoder: new OpusEncoder(48000, 1),
-        pcmAccumulator: Buffer.alloc(0),
         logger: this.logger,
       };
 
@@ -116,14 +114,12 @@ export class VoiceBridge {
             }
           } catch { /* not JSON, fall through to PCM */ }
         }
-        // PCM audio — only encode if TS is ready
-        if (Buffer.isBuffer(data) && tsReady) {
-          entry.pcmAccumulator = Buffer.concat([entry.pcmAccumulator, data]);
-          while (entry.pcmAccumulator.length >= 1920) {
-            const pcm = entry.pcmAccumulator.subarray(0, 1920);
-            entry.pcmAccumulator = entry.pcmAccumulator.subarray(1920);
-            try { tsClient.sendVoice(entry.opusEncoder.encode(pcm), 4); } catch { /* */ }
-          }
+        // PCM audio — browser sends exactly 1920 bytes (960 samples @ 48kHz)
+        // per WS message — one complete 20ms frame. Encode directly, no
+        // accumulation needed.
+        if (Buffer.isBuffer(data) && tsReady && data.length >= 1920) {
+          const pcm = data.length === 1920 ? data : data.subarray(0, 1920);
+          try { tsClient.sendVoice(entry.opusEncoder.encode(pcm), 4); } catch { /* */ }
         }
       });
 
@@ -179,10 +175,10 @@ export class VoiceBridge {
           // TS → Browser: forward voice data
           tsClient.on("voiceData", (data: TSVoiceData) => {
             if (ws.readyState === WebSocket.OPEN && data.clientId !== selfId) {
-              const header = Buffer.alloc(3);
-              header.writeUInt8(data.codec, 0);
-              header.writeUInt16BE(data.clientId, 1);
-              const packet = Buffer.concat([header, data.data]);
+              const packet = Buffer.allocUnsafe(3 + data.data.length);
+              packet[0] = data.codec;
+              packet.writeUInt16BE(data.clientId, 1);
+              data.data.copy(packet, 3);
               ws.send(packet);
             }
           });

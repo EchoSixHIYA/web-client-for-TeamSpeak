@@ -35,7 +35,10 @@ export function useVoiceWebSocket() {
   let voxHold = 0;
   const VOX_HOLD = 15;
   const VOX_THRESHOLD = 0.008;
-  let pcmBuffer = new Int16Array(0);
+  // Pre-allocated buffers for hot audio path (avoid per-callback GC)
+  let convBuf = new Int16Array(1024);
+  let accumBuf = new Int16Array(2048);
+  let accumLen = 0;
 
   // Playback
   const remoteDecoders = new Map<number, AudioDecoder>();
@@ -65,21 +68,28 @@ export function useVoiceWebSocket() {
 
     scriptNode.onaudioprocess = (event) => {
       const input = event.inputBuffer.getChannelData(0);
-      // Gate: VOX energy detection or keyboard PTT
       const shouldSend = micMode.value === "ptt" ? pttPressed : voxGate(input);
-      if (!shouldSend) { pcmBuffer = new Int16Array(0); return; }
-      const int16 = new Int16Array(input.length);
+      if (!shouldSend) { accumLen = 0; return; }
+      // Float32 → Int16 via pre-allocated convBuf (avoids per-callback allocation)
+      if (convBuf.length < input.length) convBuf = new Int16Array(input.length);
       for (let i = 0; i < input.length; i++) {
         const s = Math.max(-1, Math.min(1, input[i]));
-        int16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+        convBuf[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
       }
-      const combined = new Int16Array(pcmBuffer.length + int16.length);
-      combined.set(pcmBuffer); combined.set(int16, pcmBuffer.length);
-      pcmBuffer = combined;
-      while (pcmBuffer.length >= 960 && ws.value?.readyState === WebSocket.OPEN) {
-        ws.value.send(pcmBuffer.slice(0, 960).buffer);
-        pcmBuffer = pcmBuffer.slice(960);
+      // Append to pre-allocated accumBuf (grows if needed, max ~1984)
+      const need = accumLen + input.length;
+      if (accumBuf.length < need) accumBuf = new Int16Array(need);
+      accumBuf.set(convBuf.subarray(0, input.length), accumLen);
+      accumLen = need;
+      // Send complete 960-sample frames
+      let offset = 0;
+      while (offset + 960 <= accumLen && ws.value?.readyState === WebSocket.OPEN) {
+        ws.value.send(accumBuf.slice(offset, offset + 960).buffer);
+        offset += 960;
       }
+      // Compact: shift remaining to front
+      accumLen -= offset;
+      if (offset > 0) accumBuf.set(accumBuf.subarray(offset, offset + accumLen), 0);
     };
 
     micSource.connect(scriptNode);
@@ -96,7 +106,7 @@ export function useVoiceWebSocket() {
   }
 
   function stopMicrophone(): void {
-    pcmBuffer = new Int16Array(0);
+    accumLen = 0;
     scriptNode?.disconnect(); scriptNode = null;
     micSource?.disconnect(); micSource = null;
     micStream?.getTracks().forEach((t) => t.stop()); micStream = null;
