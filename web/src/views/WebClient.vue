@@ -78,7 +78,7 @@
             <span class="m-avatar" :class="{ self: m.isSelf }" :style="avatarStyle(m.nickname, m.isSelf)">{{ m.nickname[0] }}</span>
             <span class="m-name" :class="{ self: m.isSelf }">{{ m.nickname }}</span>
             <span v-if="m.isSelf" class="m-tag">你</span>
-            <input v-if="!m.isSelf" type="range" min="0" max="200" :value="(volumes[m.id] ?? 1) * 100" @input="onVolInput(m.id, $event)" class="vol-slider" title="音量" />
+            <input v-if="!m.isSelf" type="range" min="0" max="400" :value="(volumes[m.id] ?? 1) * 100" @input="onVolInput(m.id, $event)" class="vol-slider" title="音量" />
           </div>
         </template>
         <div v-if="channelTree.length === 0" class="loading-state">
