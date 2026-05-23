@@ -5,22 +5,12 @@
       <span class="subtitle">TeamSpeak 网页客户端</span>
     </header>
 
-    <!-- Connect form -->
     <div v-if="!voiceState.connected" class="panel">
       <div class="panel-title">加入服务器</div>
+      <div v-if="noToken" class="error-box">缺少连接密钥，请使用完整链接</div>
       <div v-if="voiceState.error" class="error-box">{{ voiceState.error }}</div>
       <div v-if="browserError" class="error-box">{{ browserError }}</div>
 
-      <div class="form-row">
-        <div class="form-group" style="flex:3">
-          <label>TeamSpeak 服务器 IP</label>
-          <input v-model="tsHost" placeholder="127.0.0.1" />
-        </div>
-        <div class="form-group" style="flex:1">
-          <label>端口</label>
-          <input v-model="tsPort" placeholder="9987" />
-        </div>
-      </div>
       <div class="form-group">
         <label>昵称</label>
         <input v-model="nickname" placeholder="你的昵称" maxlength="30" />
@@ -29,20 +19,13 @@
         <label>频道名（可选）</label>
         <input v-model="channel" placeholder="留空进入默认频道" />
       </div>
-      <div class="form-group">
-        <label>连接密钥</label>
-        <input v-model="token" type="password" placeholder="服务器预设的 voiceToken" />
-      </div>
-      <button :disabled="!tsHost.trim() || !nickname.trim() || !token.trim()" class="btn btn-primary" @click="doConnect">
-        连接
-      </button>
+      <button :disabled="!nickname.trim() || noToken" class="btn btn-primary" @click="doConnect">连接</button>
     </div>
 
-    <!-- Connected -->
     <div v-else class="connected-layout">
       <div class="top-bar">
         <span class="status-dot"></span>
-        <span>{{ tsHost }}</span>
+        <span>已连接</span>
         <span class="mode-switch">
           <button :class="{ active: micMode === 'vox' }" @click="setMicMode('vox')">自由麦</button>
           <button :class="{ active: micMode === 'ptt' }" @click="setMicMode('ptt')">按键说话</button>
@@ -54,25 +37,17 @@
       <div class="channel-panel">
         <div class="section-title" @click="requestChannels()">频道与成员 ↻</div>
         <template v-for="ch in channelTree" :key="ch.id">
-          <div class="channel-item"
-               :style="{ paddingLeft: (ch.depth * 14 + 8) + 'px' }"
-               @click="doSwitchChannel(ch.id)">
+          <div class="channel-item" :style="{ paddingLeft: (ch.depth * 14 + 8) + 'px' }" @click="doSwitchChannel(ch.id)">
             <span class="ch-icon">#</span> {{ ch.name }}
           </div>
-          <div v-for="m in ch.members" :key="m.id" class="member-item"
-               :style="{ paddingLeft: (ch.depth * 14 + 24) + 'px' }">
+          <div v-for="m in ch.members" :key="m.id" class="member-item" :style="{ paddingLeft: (ch.depth * 14 + 24) + 'px' }">
             <span class="m-dot"></span> {{ m.nickname }}
           </div>
         </template>
-        <div v-if="channelTree.length === 0" style="color:#666;font-size:13px;padding:8px">
-          点击上方 "频道与成员 ↻" 加载
-        </div>
+        <div v-if="channelTree.length === 0" style="color:#666;font-size:13px;padding:8px">自动加载中...</div>
       </div>
 
-      <div v-if="micMode === 'ptt'" class="ptt-bar">
-        {{ pttActive ? '🔊 正在发送' : '按住 空格键 说话' }}
-      </div>
-
+      <div v-if="micMode === 'ptt'" class="ptt-bar">{{ pttActive ? '🔊 正在发送' : '按住 空格键 说话' }}</div>
       <div v-if="voiceState.error" class="error-box" style="margin:8px">{{ voiceState.error }}</div>
     </div>
   </div>
@@ -95,13 +70,11 @@ const channelTree = computed(() => {
   return list.map(ch => ({ ...ch, depth: getPath(ch).split("/").length - 2 }));
 });
 
-// URL params
 const qs = new URLSearchParams(location.search);
-const tsHost = ref(qs.get("ts") ?? "127.0.0.1");
-const tsPort = ref("9987");
 const nickname = ref("");
 const channel = ref(qs.get("channel") ?? "");
-const token = ref(qs.get("token") ?? "");
+const token = qs.get("token") ?? "";
+const noToken = !token;
 
 const pttActive = ref(false);
 const browserError = ref("");
@@ -112,33 +85,23 @@ onUnmounted(() => { disconnect(); });
 
 function doConnect() {
   clearError();
-  connect(token.value, tsHost.value.trim(), tsPort.value.trim(), channel.value.trim(), nickname.value.trim());
+  connect(token, channel.value.trim(), nickname.value.trim());
   nextTick(() => rootEl.value?.focus());
 }
 function doDisconnect() { disconnect(); }
 function doSwitchChannel(chId: string) { switchChannel(chId); }
 
 function doShare() {
-  const url = new URL(location.origin);
-  url.searchParams.set("token", token.value);
-  url.searchParams.set("ts", tsHost.value);
+  const url = new URL(location.href);
   if (channel.value) url.searchParams.set("channel", channel.value);
-  navigator.clipboard.writeText(url.toString()).then(() => {
-    alert("链接已复制到剪贴板");
-  }).catch(() => {
-    prompt("复制此链接:", url.toString());
-  });
+  navigator.clipboard.writeText(url.toString()).then(() => alert("链接已复制")).catch(() => prompt("复制:", url.toString()));
 }
 
 function onKeyDown(e: KeyboardEvent) {
-  if (e.code === "Space" && micMode.value === "ptt" && !pttActive.value) {
-    e.preventDefault(); pttActive.value = true; setPTT(true);
-  }
+  if (e.code === "Space" && micMode.value === "ptt" && !pttActive.value) { e.preventDefault(); pttActive.value = true; setPTT(true); }
 }
 function onKeyUp(e: KeyboardEvent) {
-  if (e.code === "Space" && micMode.value === "ptt") {
-    pttActive.value = false; setPTT(false);
-  }
+  if (e.code === "Space" && micMode.value === "ptt") { pttActive.value = false; setPTT(false); }
 }
 </script>
 
@@ -153,7 +116,6 @@ function onKeyUp(e: KeyboardEvent) {
 .form-group label { display: block; font-size: 11px; color: #888; margin-bottom: 4px; text-transform: uppercase; }
 .form-group input { width: 100%; padding: 10px 12px; border: 1px solid #2a3a5c; border-radius: 8px; background: #0f3460; color: #e0e0e0; font-size: 14px; outline: none; }
 .form-group input:focus { border-color: #4a90d9; }
-.form-row { display: flex; gap: 10px; }
 .btn { width: 100%; padding: 12px; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 4px; }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .btn-primary { background: #2563eb; color: #fff; }
@@ -170,10 +132,8 @@ function onKeyUp(e: KeyboardEvent) {
 .channel-item:hover { background: #1a3a6a; }
 .ch-icon { color: #666; margin-right: 4px; }
 .member-item { display: flex; align-items: center; gap: 6px; padding: 3px 8px; font-size: 12px; color: #999; }
-.member-item.self { color: #fff; }
-.section-title { font-size: 11px; color: #888; text-transform: uppercase; margin-bottom: 8px; cursor: pointer; }
 .m-dot { width: 6px; height: 6px; border-radius: 50%; background: #4ade80; flex-shrink: 0; }
-.self-tag { font-size: 10px; background: #2563eb; color: #fff; padding: 1px 4px; border-radius: 3px; }
+.section-title { font-size: 11px; color: #888; text-transform: uppercase; margin-bottom: 8px; cursor: pointer; }
 .ptt-bar { text-align: center; padding: 8px; background: #16213e; border-radius: 8px; font-size: 13px; color: #aaa; }
 .error-box { background: #3b1a1a; color: #fca5a5; padding: 10px 14px; border-radius: 8px; font-size: 13px; margin-bottom: 12px; }
 </style>

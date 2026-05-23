@@ -135,10 +135,10 @@ export function useVoiceWebSocket() {
   }
 
   // --- WebSocket ---
-  function connect(token: string, tsHost: string, tsPort: string, channel: string, nickname: string): void {
+  function connect(token: string, channel: string, nickname: string): void {
     state.error = ""; members.length = 0; channels.length = 0;
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    const params = new URLSearchParams({ token, nickname, tsHost, tsPort });
+    const params = new URLSearchParams({ token, nickname });
     if (channel) params.set("channel", channel);
     ws.value = new WebSocket(`${proto}//${location.host}/ws/voice?${params.toString()}`);
     ws.value.binaryType = "arraybuffer";
