@@ -5,3 +5,4 @@ data/
 config.json
 *.log
 .env
+webspeak-update.tar.gz
