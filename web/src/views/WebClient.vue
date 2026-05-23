@@ -52,9 +52,17 @@
         <button class="btn-disconnect" @click="doDisconnect">断开</button>
       </div>
 
-      <div class="member-panel">
-        <div class="section-title">频道成员 ({{ members.length }})</div>
-        <div class="member-list">
+      <div class="main-content">
+        <div class="channel-panel">
+          <div class="section-title" @click="requestChannels()">频道 ↻</div>
+          <div v-for="ch in channelTree" :key="ch.id" class="channel-item"
+               :style="{ paddingLeft: (ch.depth * 14 + 8) + 'px' }"
+               @click="doSwitchChannel(ch.id)">
+            <span class="ch-icon">{{ ch.depth > 0 ? '└' : '#' }}</span> {{ ch.name }}
+          </div>
+        </div>
+        <div class="member-panel">
+          <div class="section-title">成员 ({{ members.length }})</div>
           <div v-for="m in members" :key="m.id" class="member-item" :class="{ self: m.isSelf }">
             <span class="m-dot"></span> {{ m.nickname }}
             <span v-if="m.isSelf" class="self-tag">我</span>
@@ -72,10 +80,21 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, nextTick } from "vue";
+import { ref, computed, onMounted, onUnmounted, nextTick } from "vue";
 import { useVoiceWebSocket } from "../composables/useVoiceWebSocket.js";
 
-const { state: voiceState, members, micMode, connect, disconnect, setMicMode, setPTT, checkSupport, clearError } = useVoiceWebSocket();
+const { state: voiceState, members, channels, micMode, connect, disconnect, requestChannels, switchChannel, setMicMode, setPTT, checkSupport, clearError } = useVoiceWebSocket();
+
+const channelTree = computed(() => {
+  const list = [...channels];
+  const getPath = (ch: { id: string; parentID: string; name: string }): string => {
+    if (ch.parentID === "0" || !ch.parentID) return "/" + ch.id;
+    const p = channels.find(c => c.id === ch.parentID);
+    return (p ? getPath(p) : "") + "/" + ch.id;
+  };
+  list.sort((a, b) => getPath(a).localeCompare(getPath(b)));
+  return list.map(ch => ({ ...ch, depth: getPath(ch).split("/").length - 2 }));
+});
 
 // URL params
 const qs = new URLSearchParams(location.search);
@@ -99,6 +118,7 @@ function doConnect() {
   nextTick(() => rootEl.value?.focus());
 }
 function doDisconnect() { disconnect(); }
+function doSwitchChannel(chId: string) { switchChannel(chId); }
 
 function onKeyDown(e: KeyboardEvent) {
   if (e.code === "Space" && micMode.value === "ptt" && !pttActive.value) {
@@ -134,8 +154,13 @@ function onKeyUp(e: KeyboardEvent) {
 .mode-switch button { padding: 4px 10px; border: 1px solid #2a3a5c; border-radius: 4px; background: transparent; color: #888; font-size: 12px; cursor: pointer; }
 .mode-switch button.active { background: #2563eb; color: #fff; border-color: #2563eb; }
 .btn-disconnect { padding: 4px 10px; background: #374151; border: none; border-radius: 4px; color: #ccc; font-size: 12px; cursor: pointer; }
+.main-content { display: flex; gap: 8px; flex: 1; min-height: 0; }
+.channel-panel { flex: 1; background: #16213e; border-radius: 8px; padding: 12px; overflow-y: auto; }
+.channel-item { padding: 4px 8px; font-size: 13px; color: #ccc; cursor: pointer; border-radius: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.channel-item:hover { background: #1a3a6a; }
+.ch-icon { color: #666; margin-right: 4px; }
 .member-panel { flex: 1; background: #16213e; border-radius: 8px; padding: 12px; overflow-y: auto; }
-.section-title { font-size: 11px; color: #888; text-transform: uppercase; margin-bottom: 8px; }
+.section-title { font-size: 11px; color: #888; text-transform: uppercase; margin-bottom: 8px; cursor: pointer; }
 .member-item { display: flex; align-items: center; gap: 6px; padding: 4px 8px; font-size: 13px; color: #ccc; }
 .member-item.self { color: #fff; }
 .m-dot { width: 6px; height: 6px; border-radius: 50%; background: #4ade80; flex-shrink: 0; }

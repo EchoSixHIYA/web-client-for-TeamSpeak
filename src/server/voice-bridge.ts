@@ -162,6 +162,12 @@ export class VoiceBridge {
 
           // Browser → TS: PCM → Opus encoding
           ws.on("message", (data: Buffer) => {
+            // JSON commands start with '{'
+            if (data.length > 0 && data[0] === 0x7b) {
+              try { handleCommand(entry, JSON.parse(data.toString("utf-8"))); } catch { /* */ }
+              return;
+            }
+            // PCM binary
             entry.pcmAccumulator = Buffer.concat([entry.pcmAccumulator, data]);
             while (entry.pcmAccumulator.length >= 1920) {
               const pcm = entry.pcmAccumulator.subarray(0, 1920);
@@ -211,5 +217,36 @@ export class VoiceBridge {
       this.clients.delete(id);
     }
     this.wss?.close();
+  }
+}
+
+async function handleCommand(entry: WebClientEntry, cmd: { type: string; [k: string]: unknown }) {
+  switch (cmd.type) {
+    case "listChannels": {
+      try {
+        const channels = await entry.tsClient.listChannels();
+        if (entry.ws.readyState === WebSocket.OPEN) {
+          entry.ws.send(JSON.stringify({ type: "channelList", channels }));
+        }
+      } catch {
+        if (entry.ws.readyState === WebSocket.OPEN) {
+          entry.ws.send(JSON.stringify({ type: "channelList", channels: [] }));
+        }
+      }
+      break;
+    }
+    case "switchChannel": {
+      try {
+        await entry.tsClient.switchChannel(BigInt(cmd.channelId as string));
+        if (entry.ws.readyState === WebSocket.OPEN) {
+          entry.ws.send(JSON.stringify({ type: "channelSwitched", channelId: cmd.channelId }));
+        }
+      } catch (e: any) {
+        if (entry.ws.readyState === WebSocket.OPEN) {
+          entry.ws.send(JSON.stringify({ type: "error", message: "切换失败: " + e.message }));
+        }
+      }
+      break;
+    }
   }
 }

@@ -2,8 +2,11 @@ import { EventEmitter } from "node:events";
 import {
   Client as TS3FullClient,
   generateIdentity,
+  listChannels as tsListChannels,
+  clientMove as tsClientMove,
   type Identity,
   type VoiceData,
+  type ChannelInfo,
 } from "@honeybbq/teamspeak-client";
 import type { Logger } from "../logger.js";
 
@@ -113,6 +116,16 @@ export class TSClient extends EventEmitter {
       .replace(/\//g, "\\/");
     this.client.execCommand(`sendtextmessage targetmode=2 target=0 msg=${escaped}`)
       .catch((err: Error) => this.logger.error({ err }, "sendTextMessage failed"));
+  }
+
+  async listChannels(): Promise<ChannelInfo[]> {
+    if (!this.client) return [];
+    return tsListChannels(this.client);
+  }
+
+  async switchChannel(channelId: bigint, password?: string): Promise<void> {
+    if (!this.client) return;
+    await tsClientMove(this.client, this.clientId, channelId, password);
   }
 
   getClientId(): number {

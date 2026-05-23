@@ -12,10 +12,17 @@ export interface ChannelMember {
   isSelf?: boolean;
 }
 
+export interface ChannelInfo {
+  id: string;
+  parentID: string;
+  name: string;
+}
+
 export function useVoiceWebSocket() {
   const ws = ref<WebSocket | null>(null);
   const state = reactive<VoiceState>({ connected: false, tsClientId: 0, error: "" });
   const members = reactive<ChannelMember[]>([]);
+  const channels = reactive<ChannelInfo[]>([]);
 
   // Audio: capture PCM s16 via ScriptProcessorNode
   let audioCtx: AudioContext | null = null;
@@ -128,7 +135,7 @@ export function useVoiceWebSocket() {
 
   // --- WebSocket ---
   function connect(token: string, tsHost: string, tsPort: string, channel: string, nickname: string): void {
-    state.error = ""; members.length = 0;
+    state.error = ""; members.length = 0; channels.length = 0;
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
     const params = new URLSearchParams({ token, nickname, tsHost, tsPort });
     if (channel) params.set("channel", channel);
@@ -145,7 +152,7 @@ export function useVoiceWebSocket() {
 
   function disconnect(): void {
     stopMicrophone(); ws.value?.close(1000); ws.value = null;
-    state.connected = false; state.tsClientId = 0; members.length = 0;
+    state.connected = false; state.tsClientId = 0; members.length = 0; channels.length = 0;
     for (const [, d] of remoteDecoders) d.close();
     remoteDecoders.clear(); nextPlayTime = 0;
   }
@@ -160,7 +167,10 @@ export function useVoiceWebSocket() {
         if (!members.find((m) => m.id === msg.id)) members.push({ id: msg.id, nickname: msg.nickname, isSelf: msg.isSelf });
         break;
       case "memberLeave": { const idx = members.findIndex((m) => m.id === msg.id); if (idx >= 0) members.splice(idx, 1); break; }
+      case "channelList": channels.length = 0; for (const ch of msg.channels) channels.push(ch); break;
+      case "channelSwitched": members.length = 0; state.error = ""; break;
       case "disconnected": state.connected = false; state.error = "TS 连接断开"; break;
+      case "error": state.error = msg.message; break;
     }
   }
 
@@ -171,9 +181,14 @@ export function useVoiceWebSocket() {
     playAudioFrame(clientId, data.slice(3));
   }
 
+  function sendCmd(cmd: Record<string, unknown>) {
+    if (ws.value?.readyState === WebSocket.OPEN) ws.value.send(JSON.stringify(cmd));
+  }
+  function requestChannels() { sendCmd({ type: "listChannels" }); }
+  function switchChannel(channelId: string) { sendCmd({ type: "switchChannel", channelId }); }
   function setMicMode(m: "vox" | "ptt") { micMode.value = m; }
   function setPTT(p: boolean) { pttPressed = p; }
   function clearError() { state.error = ""; }
 
-  return { ws, state, members, micMode, connect, disconnect, setMicMode, setPTT, checkSupport, clearError };
+  return { ws, state, members, channels, micMode, connect, disconnect, requestChannels, switchChannel, setMicMode, setPTT, checkSupport, clearError };
 }
