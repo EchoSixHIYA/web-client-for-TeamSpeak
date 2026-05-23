@@ -43,6 +43,8 @@ export function useVoiceWebSocket() {
   // Playback — per-client state to avoid interleaving streams
   const remoteDecoders = new Map<number, AudioDecoder>();
   const remotePlayTimes = new Map<number, number>();
+  const remoteGains = new Map<number, GainNode>();
+  const volumes = reactive<Record<number, number>>({});
 
   function getAudioCtx(): AudioContext {
     if (!audioCtx) audioCtx = new AudioContext({ sampleRate: 48000 });
@@ -119,6 +121,10 @@ export function useVoiceWebSocket() {
     let decoder = remoteDecoders.get(clientId);
     if (!decoder) {
       const ctx = getAudioCtx();
+      const gainNode = ctx.createGain();
+      gainNode.gain.value = volumes[clientId] ?? 1;
+      gainNode.connect(ctx.destination);
+      remoteGains.set(clientId, gainNode);
       decoder = new AudioDecoder({
         output: (chunk: AudioData) => {
           try {
@@ -130,7 +136,7 @@ export function useVoiceWebSocket() {
               buffer.copyToChannel(data, ch);
             }
             const source = ctx.createBufferSource();
-            source.buffer = buffer; source.connect(ctx.destination);
+            source.buffer = buffer; source.connect(gainNode);
             let pt = remotePlayTimes.get(clientId) ?? ctx.currentTime;
             if (pt < ctx.currentTime) pt = ctx.currentTime;
             source.start(pt);
@@ -170,6 +176,9 @@ export function useVoiceWebSocket() {
     state.connected = false; state.tsClientId = 0; members.length = 0; channels.length = 0;
     for (const [, d] of remoteDecoders) d.close();
     remoteDecoders.clear(); remotePlayTimes.clear();
+    for (const [, g] of remoteGains) g.disconnect();
+    remoteGains.clear();
+    for (const k of Object.keys(volumes)) delete volumes[Number(k)];
   }
 
   function handleMessage(msg: any): void {
@@ -212,5 +221,11 @@ export function useVoiceWebSocket() {
   function setPTT(p: boolean) { pttPressed = p; }
   function clearError() { state.error = ""; }
 
-  return { ws, state, members, channels, micMode, connect, disconnect, requestChannels, switchChannel, setMicMode, setPTT, checkSupport, clearError };
+  function setVolume(clientId: number, vol: number): void {
+    volumes[clientId] = vol;
+    const gain = remoteGains.get(clientId);
+    if (gain) gain.gain.value = vol;
+  }
+
+  return { ws, state, members, channels, micMode, volumes, setVolume, connect, disconnect, requestChannels, switchChannel, setMicMode, setPTT, checkSupport, clearError };
 }

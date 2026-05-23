@@ -41,7 +41,9 @@
             <span class="ch-icon">#</span> {{ ch.name }}
           </div>
           <div v-for="m in ch.members" :key="m.id" class="member-item" :style="{ paddingLeft: (ch.depth * 14 + 24) + 'px' }">
-            <span class="m-dot"></span> {{ m.nickname }}
+            <span class="m-dot" :class="{ self: m.isSelf }"></span>
+            <span class="m-name">{{ m.nickname }}</span>
+            <input v-if="!m.isSelf" type="range" min="0" max="200" :value="(volumes[m.id] ?? 1) * 100" @input="setVolume(m.id, Number(($event.target as HTMLInputElement).value) / 100)" class="vol-slider" title="音量" />
           </div>
         </template>
         <div v-if="channelTree.length === 0" style="color:#666;font-size:13px;padding:8px">自动加载中...</div>
@@ -57,7 +59,7 @@
 import { ref, computed, onMounted, onUnmounted, nextTick } from "vue";
 import { useVoiceWebSocket } from "../composables/useVoiceWebSocket.js";
 
-const { state: voiceState, members, channels, micMode, connect, disconnect, requestChannels, switchChannel, setMicMode, setPTT, checkSupport, clearError } = useVoiceWebSocket();
+const { state: voiceState, members, channels, micMode, volumes, setVolume, connect, disconnect, requestChannels, switchChannel, setMicMode, setPTT, checkSupport, clearError } = useVoiceWebSocket();
 
 const channelTree = computed(() => {
   const list = [...channels];
@@ -133,6 +135,11 @@ function onKeyUp(e: KeyboardEvent) {
 .ch-icon { color: #666; margin-right: 4px; }
 .member-item { display: flex; align-items: center; gap: 6px; padding: 3px 8px; font-size: 12px; color: #999; }
 .m-dot { width: 6px; height: 6px; border-radius: 50%; background: #4ade80; flex-shrink: 0; }
+.m-dot.self { background: #60a5fa; }
+.m-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vol-slider { width: 60px; height: 3px; -webkit-appearance: none; appearance: none; background: #2a3a5c; border-radius: 2px; outline: none; cursor: pointer; flex-shrink: 0; }
+.vol-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 10px; height: 10px; border-radius: 50%; background: #4a90d9; cursor: pointer; }
+.vol-slider::-moz-range-thumb { width: 10px; height: 10px; border-radius: 50%; background: #4a90d9; border: none; cursor: pointer; }
 .section-title { font-size: 11px; color: #888; text-transform: uppercase; margin-bottom: 8px; cursor: pointer; }
 .ptt-bar { text-align: center; padding: 8px; background: #16213e; border-radius: 8px; font-size: 13px; color: #aaa; }
 .error-box { background: #3b1a1a; color: #fca5a5; padding: 10px 14px; border-radius: 8px; font-size: 13px; margin-bottom: 12px; }
