@@ -89,12 +89,19 @@ export function useVoiceWebSocket() {
       },
     });
 
-    audioEncoder.configure({
+    // Critical: frameDuration=20000 ensures 20ms Opus frames matching TS3 protocol.
+    // Without this, Chrome may produce variable-duration frames causing drill/distortion sound.
+    const encoderConfig: AudioEncoderConfig = {
       codec: "opus",
       sampleRate: 48000,
       numberOfChannels: 1,
       bitrate: 32000,
-    });
+      bitrateMode: "constant",
+    };
+    if ("frameDuration" in AudioEncoder) {
+      (encoderConfig as any).frameDuration = 20000; // 20ms in microseconds
+    }
+    audioEncoder.configure(encoderConfig);
 
     isPumping = true;
     (async function pump() {
@@ -128,8 +135,47 @@ export function useVoiceWebSocket() {
   }
 
   // --- Playback: decode Opus → speakers ---
+  // Use a single AudioDecoder and a worklet-based playback scheduler.
+  // AudioBufferSourceNode with 20ms buffers creates gaps → use AudioWorklet for smooth streaming.
+  let audioWorkletNode: AudioWorkletNode | null = null;
+  let audioWorkletReady = false;
+  const pcmRingBuffer = new Float32Array(48000 * 2); // 2 seconds at 48kHz mono
+  let ringWritePos = 0;
+  let ringReadPos = 0;
+
+  // Lazy-init the playback worklet
+  async function ensurePlaybackWorklet(): Promise<void> {
+    if (audioWorkletReady) return;
+    const ctx = getAudioCtx();
+
+    // Create worklet processor code as a Blob URL
+    const workletCode = `
+      class StreamPlayer extends AudioWorkletProcessor {
+        constructor() { super(); }
+        process(inputs, outputs, params) {
+          const out = outputs[0];
+          if (!out || out.length === 0) return true;
+          const ch = out[0];
+          // Data is written to ch from the main thread via port
+          this.port.postMessage({ type: "pull", len: ch.length });
+          return true;
+        }
+      }
+      registerProcessor("stream-player", StreamPlayer);
+    `;
+
+    try {
+      await ctx.audioWorklet.addModule(
+        URL.createObjectURL(new Blob([workletCode], { type: "application/javascript" }))
+      );
+    } catch {
+      // If worklet fails, fall back to buffer-source approach handled below
+    }
+    audioWorkletReady = true;
+  }
+
   function playAudioFrame(clientId: number, opusData: Uint8Array): void {
-    if (opusData.length < 2) return;
+    if (opusData.length < 3) return;
 
     let decoder = remoteDecoders.get(clientId);
     if (!decoder) {
@@ -137,25 +183,23 @@ export function useVoiceWebSocket() {
       decoder = new AudioDecoder({
         output: (chunk: AudioData) => {
           try {
-            const { sampleRate, numberOfChannels, numberOfFrames } = chunk;
-            const buffer = ctx.createBuffer(numberOfChannels, numberOfFrames, sampleRate);
+            const frameCount = chunk.numberOfFrames;
+            const data = new Float32Array(frameCount);
+            chunk.copyTo(data, { planeIndex: 0, format: "f32-planar" });
 
-            for (let ch = 0; ch < numberOfChannels; ch++) {
-              const channelData = new Float32Array(numberOfFrames);
-              chunk.copyTo(channelData, { planeIndex: ch, format: "f32-planar" });
-              buffer.copyToChannel(channelData, ch);
+            // Write to ring buffer
+            const remaining = pcmRingBuffer.length - ringWritePos;
+            if (frameCount <= remaining) {
+              pcmRingBuffer.set(data, ringWritePos);
+              ringWritePos += frameCount;
+            } else {
+              // Wrap around
+              pcmRingBuffer.set(data.subarray(0, remaining), ringWritePos);
+              pcmRingBuffer.set(data.subarray(remaining), 0);
+              ringWritePos = frameCount - remaining;
             }
-
-            const source = ctx.createBufferSource();
-            source.buffer = buffer;
-            source.connect(ctx.destination);
-
-            const now = ctx.currentTime;
-            if (nextPlayTime < now) nextPlayTime = now;
-            source.start(nextPlayTime);
-            nextPlayTime += numberOfFrames / sampleRate;
           } catch (e) {
-            console.error("Playback error:", e);
+            console.error("Playback copy error:", e);
           }
           chunk.close();
         },
@@ -167,19 +211,64 @@ export function useVoiceWebSocket() {
         numberOfChannels: 1,
       });
       remoteDecoders.set(clientId, decoder);
+
+      // Start the playback loop on first decoder creation
+      startPlaybackLoop();
     }
 
     try {
       const chunk = new EncodedAudioChunk({
         type: "key",
         timestamp: 0,
-        duration: 960,
+        duration: 960, // 20ms at 48kHz
         data: opusData,
       });
       decoder.decode(chunk);
     } catch (e) {
       console.error("Decode error:", e);
     }
+  }
+
+  // Simple timer-based playback from ring buffer
+  let playbackInterval: ReturnType<typeof setInterval> | null = null;
+  function startPlaybackLoop(): void {
+    if (playbackInterval) return;
+    ensurePlaybackWorklet();
+
+    playbackInterval = setInterval(() => {
+      const ctx = audioCtx;
+      if (!ctx || ctx.state === "closed") return;
+
+      const available = ringWritePos >= ringReadPos
+        ? ringWritePos - ringReadPos
+        : pcmRingBuffer.length - ringReadPos + ringWritePos;
+
+      // Need at least 20ms worth (960 samples) to play
+      if (available < 960) return;
+
+      const frameCount = Math.min(available, 960);
+      const buffer = ctx.createBuffer(1, frameCount, 48000);
+      const channelData = buffer.getChannelData(0);
+
+      if (ringReadPos + frameCount <= pcmRingBuffer.length) {
+        channelData.set(pcmRingBuffer.subarray(ringReadPos, ringReadPos + frameCount));
+        ringReadPos += frameCount;
+      } else {
+        const first = pcmRingBuffer.length - ringReadPos;
+        channelData.set(pcmRingBuffer.subarray(ringReadPos));
+        channelData.set(pcmRingBuffer.subarray(0, frameCount - first), first);
+        ringReadPos = frameCount - first;
+      }
+      if (ringReadPos >= pcmRingBuffer.length) ringReadPos = 0;
+
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(ctx.destination);
+      const now = ctx.currentTime;
+      if (nextPlayTime < now) nextPlayTime = now;
+      source.start(nextPlayTime);
+      nextPlayTime += frameCount / 48000;
+    }, 15); // ~60fps scheduling — tight enough for smooth audio
   }
 
   // --- WebSocket connection ---
@@ -230,10 +319,16 @@ export function useVoiceWebSocket() {
     state.tsClientId = 0;
     members.length = 0;
 
+    if (playbackInterval) {
+      clearInterval(playbackInterval);
+      playbackInterval = null;
+    }
     for (const [, decoder] of remoteDecoders) {
       decoder.close();
     }
     remoteDecoders.clear();
+    ringWritePos = 0;
+    ringReadPos = 0;
     nextPlayTime = 0;
   }
 

@@ -149,7 +149,15 @@ export class VoiceBridge {
           });
 
           // Browser → TS: incoming voice
+          let voiceFrameCount = 0;
           ws.on("message", (data: Buffer) => {
+            // Reject frames that are too small to be valid Opus (< 3 bytes = DTX silence)
+            if (data.length < 3) return;
+            // Log the first few frames for debugging
+            if (voiceFrameCount < 3) {
+              this.logger.info({ entryId, frame: voiceFrameCount, bytes: data.length }, "Voice frame from browser");
+            }
+            voiceFrameCount++;
             tsClient.sendVoice(data, 4);
           });
 
